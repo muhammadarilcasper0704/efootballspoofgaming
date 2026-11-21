@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 mkdir -p deps dist
 [ -d deps/zygisk/.git ] || git clone https://github.com/topjohnwu/zygisk-module-sample.git deps/zygisk
 [ -d deps/dobby/.git ] || git clone --recursive https://github.com/jmpews/Dobby.git deps/dobby
+git -C deps/dobby fetch --depth 1 origin c1da0315d7a2069bde2ab432e45d4ab6df91237a
 git -C deps/dobby checkout --detach c1da0315d7a2069bde2ab432e45d4ab6df91237a
 git -C deps/zygisk checkout --detach 8ce26128f81baaed0b969aaf7f52f886b61af4ab
 git -C deps/dobby submodule update --init --recursive
