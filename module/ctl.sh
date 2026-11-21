@@ -18,9 +18,14 @@ status)
   else echo "Game belum berjalan."; fi
   ;;
 set|restore)
-  # Magisk BusyBox releases the advisory lock when this process exits.
-  exec 9>selection.lock
-  /data/adb/magisk/busybox flock -n 9 || { echo "Panel sedang digunakan atau flock tidak tersedia." >&2; exit 1; }
+  # flock opens the path and holds the lock for the entire child command.
+  busybox=/data/adb/magisk/busybox
+  [ -x "$busybox" ] || { echo "Magisk BusyBox tidak ditemukan." >&2; exit 1; }
+  exec "$busybox" flock -x selection.lock "$busybox" sh ./ctl.sh locked "$@"
+  ;;
+locked)
+  shift
+  case "${1:-}" in set|restore) ;; *) exit 2;; esac
   read_current
   if [ "$1" = restore ]; then
     [ -f previous ] || { echo "Belum ada backup." >&2; exit 1; }
