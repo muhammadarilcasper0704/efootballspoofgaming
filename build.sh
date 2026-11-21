@@ -5,20 +5,9 @@ cd "$(dirname "$0")"
 mkdir -p deps dist
 [ -d deps/zygisk/.git ] || git clone https://github.com/topjohnwu/zygisk-module-sample.git deps/zygisk
 [ -d deps/dobby/.git ] || git clone --recursive https://github.com/jmpews/Dobby.git deps/dobby
-git -C deps/dobby checkout --detach 5dfc8546954ce3b3198132ab13fddb89ee92cdd7
+git -C deps/dobby checkout --detach c1da0315d7a2069bde2ab432e45d4ab6df91237a
 git -C deps/zygisk checkout --detach 8ce26128f81baaed0b969aaf7f52f886b61af4ab
-# Use an ELF branch relocation for the Android build of the ARM64 bridge.
-python3 - <<'PY'
-from pathlib import Path
-p = Path("deps/dobby/source/TrampolineBridge/ClosureTrampolineBridge/arm64/closure_bridge_arm64.asm")
-s = p.read_text()
-old = """adrp TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGE
-add TMP_REG_0, TMP_REG_0, cdecl(common_closure_bridge_handler)@PAGEOFF
-blr TMP_REG_0"""
-if old not in s and "bl cdecl(common_closure_bridge_handler)" not in s:
-    raise SystemExit("Unexpected upstream assembly")
-p.write_text(s.replace(old, "bl cdecl(common_closure_bridge_handler)"))
-PY
+git -C deps/dobby submodule update --init --recursive
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static

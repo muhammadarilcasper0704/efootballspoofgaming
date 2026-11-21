@@ -98,7 +98,7 @@ void enableGPU(){
     void* lib=dlopen("libGLESv2.so",RTLD_NOW | RTLD_LOCAL);
     if (!lib){report("GLES: loader tidak tersedia.");return;}
     void* fn=dlsym(lib,"glGetString");
-    if (!fn || DobbyHook(fn,reinterpret_cast<void*>(profileString),reinterpret_cast<void**>(&original))!=0){
+    if (!fn || DobbyHook(fn,reinterpret_cast<dobby_dummy_func_t>(profileString),reinterpret_cast<dobby_dummy_func_t*>(&original))!=0){
         dlclose(lib);report("GLES: pemasangan gagal.");return;
     }
     report("GLES: menunggu panggilan GL_RENDERER.");
