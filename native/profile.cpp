@@ -19,6 +19,9 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <cstdlib>
+#include <limits.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/mount.h>
@@ -54,7 +57,7 @@ void mark(int offset,char value) {
     if(auditFd>=0)pwrite(auditFd,&value,1,offset);
 }
 void beginAudit(const Options& flags) {
-    auditFd=syscall(__NR_memfd_create,"aril-efo-063",1U);
+    auditFd=syscall(__NR_memfd_create,"aril-efo-064",1U);
     if(auditFd<0)return;
     char data[]="000-----------";
     data[0]=flags.device?'1':'0';data[1]=flags.cpu?'1':'0';data[2]=flags.gpu?'1':'0';
@@ -228,8 +231,35 @@ void noteCpuOpen(){
 bool needsMode(int flags){
     return (flags & O_CREAT) || (flags & O_TMPFILE)==O_TMPFILE;
 }
+char appCache[PATH_MAX]{};
+
+// Open the same inode read-only while it still has a name in the game's
+// private cache. Each caller gets an independent file offset after unlink.
+int cacheReader(int flags){
+    if(!appCache[0])return -1;
+    char name[PATH_MAX];
+    int len=snprintf(name,sizeof(name),"%s/.aril-cpu-XXXXXX",appCache);
+    if(len<0 || size_t(len)>=sizeof(name))return -1;
+    int writer=mkostemp(name,O_CLOEXEC);
+    if(writer<0)return -1;
+    int reader=-1;
+    if(write(writer,cpu,sizeof(cpu)-1)==sizeof(cpu)-1){
+        reader=open(name,flags|O_NOFOLLOW);
+        struct stat a{},b{};
+        if(reader>=0 && (fstat(writer,&a)!=0 || fstat(reader,&b)!=0 ||
+            a.st_dev!=b.st_dev || a.st_ino!=b.st_ino)){
+            close(reader);
+            reader=-1;
+        }
+    }
+    unlink(name);
+    close(writer);
+    return reader;
+}
 int profileFd(const char* path,int flags){
     if(!path || strcmp(path,"/proc/cpuinfo")!=0 || (flags & ~(O_CLOEXEC|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW))!=0)return -1;
+    int cached=cacheReader(flags);
+    if(cached>=0)return cached;
     int fd=syscall(__NR_memfd_create,"aril-a8-cpu",1U);
     if(fd<0)return -1;
     int reader=-1;
@@ -363,6 +393,16 @@ public:
             else env->ExceptionClear();
         }
         if(!selected){api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);return;}
+        if(args->app_data_dir){
+            const char* data=env->GetStringUTFChars(args->app_data_dir,nullptr);
+            if(data){
+                if(data[0]=='/'){
+                    int n=snprintf(appCache,sizeof(appCache),"%s/cache",data);
+                    if(n<0 || size_t(n)>=sizeof(appCache))appCache[0]=0;
+                }
+                env->ReleaseStringUTFChars(args->app_data_dir,data);
+            }else if(env->ExceptionCheck())env->ExceptionClear();
+        }
         int dir=api->getModuleDir();
         char bits[4]{};
         bool valid=dir>=0 && readSelection(dir,bits);

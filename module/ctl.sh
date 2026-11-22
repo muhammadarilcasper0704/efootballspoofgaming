@@ -17,7 +17,7 @@ status)
     # Match only the descriptor owned by the live game process. The kernel
     # discards it on process exit, so recycled PIDs cannot inherit evidence.
     stamp=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
-    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-063" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
+    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-064" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
     fd=${fdnum:+/proc/$pid/fd/$fdnum}
     record=''
     if [ -n "$fd" ]; then record=$(dd if="$fd" bs=14 count=1 2>/dev/null || :); fi
@@ -26,7 +26,7 @@ status)
     case "$record" in
       [01][01][01][01-][01-][01-][01-][01-][01-][01-][01-][01-][01-][01-])
         active=$(printf '%s' "$record" | cut -c1-3)
-        echo "Modul 0.6.3 dimuat di PID ini dengan pilihan $active."
+        echo "Modul 0.6.4 dimuat di PID ini dengan pilihan $active."
         [ "$active" = "$current" ] || echo "Pilihan baru berlaku setelah game dibuka ulang."
         show() {
           value=$(printf '%s' "$record" | cut -c"$1")
