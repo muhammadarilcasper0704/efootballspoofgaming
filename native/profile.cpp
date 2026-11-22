@@ -54,11 +54,11 @@ void mark(int offset,char value) {
     if(auditFd>=0)pwrite(auditFd,&value,1,offset);
 }
 void beginAudit(const Options& flags) {
-    auditFd=syscall(__NR_memfd_create,"aril-efo-062",1U);
+    auditFd=syscall(__NR_memfd_create,"aril-efo-063",1U);
     if(auditFd<0)return;
-    char data[]="000-------";
+    char data[]="000-----------";
     data[0]=flags.device?'1':'0';data[1]=flags.cpu?'1':'0';data[2]=flags.gpu?'1':'0';
-    if(write(auditFd,data,10)!=10){close(auditFd);auditFd=-1;}
+    if(write(auditFd,data,sizeof(data)-1)!=sizeof(data)-1){close(auditFd);auditFd=-1;}
 }
 static constexpr char cpu[]=R"CPU(processor	: 0
 model name	: Apple A8 (Typhoon)
@@ -82,11 +82,13 @@ bool mountCpu(int dir) {
         if(write(fd,cpu,sizeof(cpu)-1)!=sizeof(cpu)-1){close(fd);return false;}
     }
     char path[64]; snprintf(path,sizeof path,"/proc/self/fd/%d",fd);
-    bool ok=unshare(CLONE_NEWNS)==0 && mount(nullptr,"/",nullptr,MS_REC|MS_PRIVATE,nullptr)==0
-        && mount(path,"/proc/cpuinfo",nullptr,MS_BIND,nullptr)==0;
+    const char* stage="unshare";
+    bool ok=unshare(CLONE_NEWNS)==0;
+    if(ok){stage="make-private";ok=mount(nullptr,"/",nullptr,MS_REC|MS_PRIVATE,nullptr)==0;}
+    if(ok){stage="bind-cpuinfo";ok=mount(path,"/proc/cpuinfo",nullptr,MS_BIND,nullptr)==0;}
     int error=errno;
     close(fd);
-    if(!ok)__android_log_print(ANDROID_LOG_WARN,tag,"CPU: mount errno=%d",error);
+    if(!ok)__android_log_print(ANDROID_LOG_WARN,tag,"CPU: tahap %s gagal, errno=%d",stage,error);
     return ok;
 }
 
@@ -262,12 +264,48 @@ FILE* streamCpu(const char* path,const char* mode){
             close(fd);
         }
     }
+    if(path && strcmp(path,"/proc/cpuinfo")==0 && mode && mode[0]=='r' &&
+       strspn(mode+1,"be")==strlen(mode+1)){
+        FILE* stream=fmemopen(const_cast<char*>(cpu),sizeof(cpu)-1,"r");
+        if(stream){noteCpuOpen();return stream;}
+    }
     return originalStream(path,mode);
 }
-void setupCpuFallback(){
-    attach(dlsym(RTLD_DEFAULT,"fopen"),streamCpu,originalStream);
-    attach(dlsym(RTLD_DEFAULT,"open"),openCpu,originalOpen);
-    attach(dlsym(RTLD_DEFAULT,"openat"),openAtCpu,originalOpenAt);
+bool checkReader(int fd){
+    if(fd<0)return false;
+    char data[sizeof(cpu)]{};
+    size_t used=0;
+    while(used<sizeof(data)){
+        ssize_t n=read(fd,data+used,sizeof(data)-used);
+        if(n<0 && errno==EINTR)continue;
+        if(n<0){close(fd);return false;}
+        if(n==0)break;
+        used+=static_cast<size_t>(n);
+    }
+    close(fd);
+    return used==sizeof(cpu)-1 && memcmp(data,cpu,used)==0;
+}
+bool setupCpuFallback(){
+    // Use public Bionic entry points for installation and independent readback.
+    void* lib=dlopen("libc.so",RTLD_NOW|RTLD_LOCAL);
+    if(!lib){report("CPU: libc.so tidak terbuka.");return false;}
+    auto stream=reinterpret_cast<Stream>(dlsym(lib,"fopen"));
+    auto openFile=reinterpret_cast<Open>(dlsym(lib,"open"));
+    auto openAt=reinterpret_cast<OpenAt>(dlsym(lib,"openat"));
+    bool hs=attach(reinterpret_cast<void*>(stream),streamCpu,originalStream);
+    bool ho=attach(reinterpret_cast<void*>(openFile),openCpu,originalOpen);
+    bool ha=attach(reinterpret_cast<void*>(openAt),openAtCpu,originalOpenAt);
+    bool sf=false;
+    if(hs){
+        FILE* f=stream("/proc/cpuinfo","r");
+        if(f){char data[sizeof(cpu)]{};size_t n=fread(data,1,sizeof(data),f);
+            sf=n==sizeof(cpu)-1 && !ferror(f) && feof(f) && memcmp(data,cpu,n)==0;fclose(f);}
+    }
+    bool of=ho && checkReader(openFile("/proc/cpuinfo",O_RDONLY));
+    bool af=ha && checkReader(openAt(AT_FDCWD,"/proc/cpuinfo",O_RDONLY));
+    mark(11,sf?'1':'0');mark(12,of?'1':'0');mark(13,af?'1':'0');
+    __android_log_print(ANDROID_LOG_INFO,tag,"CPU: hook fopen/open/openat=%d%d%d; isi cocok=%d%d%d",hs,ho,ha,sf,of,af);
+    return sf || of || af;
 }
 
 void enableGPU(){
@@ -345,13 +383,12 @@ public:
         if(!selected||(!flags.device&&!flags.cpu&&!flags.gpu))return;
         beginAudit(flags);
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
-        if(flags.cpu)report(setBuild(env,true)?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
+        if(flags.cpu){bool soc=setBuild(env,true);mark(10,soc?'1':'0');report(soc?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");}
         if(flags.device){bool ok=setBuild(env,false);mark(3,ok?'1':'0');report(ok?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");}
         if(flags.cpu){
             cpuSelfTest=true;
             bool mounted=verifyCpu();
-            if(!mounted)setupCpuFallback();
-            bool readable=mounted || verifyCpu();
+            bool readable=mounted || setupCpuFallback();
             cpuSelfTest=false;
             mark(4,readable?'1':'0');
             if(!mounted)mark(8,readable?'1':'0');

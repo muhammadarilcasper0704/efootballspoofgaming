@@ -17,27 +17,31 @@ status)
     # Match only the descriptor owned by the live game process. The kernel
     # discards it on process exit, so recycled PIDs cannot inherit evidence.
     stamp=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
-    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-062" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
+    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-063" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
     fd=${fdnum:+/proc/$pid/fd/$fdnum}
     record=''
-    if [ -n "$fd" ]; then record=$(dd if="$fd" bs=10 count=1 2>/dev/null || :); fi
+    if [ -n "$fd" ]; then record=$(dd if="$fd" bs=14 count=1 2>/dev/null || :); fi
     again=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
     [ -n "$stamp" ] && [ "$stamp" = "$again" ] || { echo "PID berubah. Periksa kembali."; exit 0; }
     case "$record" in
-      [01][01][01][01-][01-][01-][01-][01-][01-][01-])
+      [01][01][01][01-][01-][01-][01-][01-][01-][01-][01-][01-][01-][01-])
         active=$(printf '%s' "$record" | cut -c1-3)
-        echo "Modul 0.6.2 dimuat di PID ini dengan pilihan $active."
+        echo "Modul 0.6.3 dimuat di PID ini dengan pilihan $active."
         [ "$active" = "$current" ] || echo "Pilihan baru berlaku setelah game dibuka ulang."
         show() {
           value=$(printf '%s' "$record" | cut -c"$1")
           case "$value" in 1) echo "$2: terverifikasi.";; 0) echo "$2: gagal.";; *) echo "$2: belum teramati atau tidak dipilih.";; esac
         }
         show 4 "Perangkat iPhone 6 (Java Build)"
-        show 5 "CPU Apple A8 (dibaca oleh modul setelah proses siap)"
+        show 11 "CPU Apple A8 (Java Build.SOC_MODEL)"
+        show 5 "Profil cpuinfo terbaca melalui minimal satu jalur"
         show 6 "Pemasangan hook GLES"
         show 7 "Kueri GL_RENDERER mengembalikan Apple A8 GPU"
         show 8 "Kueri ekstensi GLES"
         show 9 "Uji baca CPU melalui libc (jalur cadangan)"
+        show 12 "Isi cpuinfo melalui fopen"
+        show 13 "Isi cpuinfo melalui open"
+        show 14 "Isi cpuinfo melalui openat"
         show 10 "Proses membuka profil CPU melalui libc di luar uji modul"
         ;;
       *) echo "Catatan proses tidak ditemukan atau tidak dapat dibaca. Periksa modul dan Zygisk di Magisk, reboot setelah pembaruan, lalu buka ulang eFootball.";;
