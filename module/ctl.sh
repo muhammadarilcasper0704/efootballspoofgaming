@@ -10,10 +10,36 @@ read_current() {
 case "${1:-}" in
 status)
   read_current
-  echo "Pilihan perangkat/CPU/GPU: $current (1 = aktif)"
+  echo "Pilihan perangkat/CPU/GPU: $current (pilihan tersimpan)"
   pid=$(pidof jp.konami.pesam 2>/dev/null | cut -d' ' -f1)
   if [ -n "$pid" ]; then
     echo "PID eFootball: $pid"
+    # Match only the descriptor owned by the live game process. The kernel
+    # discards it on process exit, so recycled PIDs cannot inherit evidence.
+    stamp=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
+    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-061" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
+    fd=${fdnum:+/proc/$pid/fd/$fdnum}
+    record=''
+    if [ -n "$fd" ]; then record=$(dd if="$fd" bs=8 count=1 2>/dev/null || :); fi
+    again=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
+    [ -n "$stamp" ] && [ "$stamp" = "$again" ] || { echo "PID berubah. Periksa kembali."; exit 0; }
+    case "$record" in
+      [01][01][01][01-][01-][01-][01-][01-])
+        active=$(printf '%s' "$record" | cut -c1-3)
+        echo "Modul 0.6.1 dimuat di PID ini dengan pilihan $active."
+        [ "$active" = "$current" ] || echo "Pilihan baru berlaku setelah game dibuka ulang."
+        show() {
+          value=$(printf '%s' "$record" | cut -c"$1")
+          case "$value" in 1) echo "$2: terverifikasi.";; 0) echo "$2: gagal.";; *) echo "$2: belum teramati atau tidak dipilih.";; esac
+        }
+        show 4 "Perangkat iPhone 6 (Java Build)"
+        show 5 "CPU Apple A8 (dibaca oleh modul setelah proses siap)"
+        show 6 "Pemasangan hook GLES"
+        show 7 "Kueri GL_RENDERER mengembalikan Apple A8 GPU"
+        show 8 "Kueri ekstensi GLES"
+        ;;
+      *) echo "Catatan proses tidak ditemukan atau tidak dapat dibaca. Periksa modul dan Zygisk di Magisk, reboot setelah pembaruan, lalu buka ulang eFootball.";;
+    esac
     if [ -r "/proc/$pid/root/proc/cpuinfo" ]; then
       if cmp -s cpuinfo "/proc/$pid/root/proc/cpuinfo"; then echo "CPU: cpuinfo PID cocok persis dengan profil 2 inti Typhoon."; else rc=$?; if [ "$rc" -eq 1 ]; then echo "CPU: cpuinfo PID berbeda dari profil."; else echo "CPU: pembandingan cpuinfo gagal."; fi; fi
     else echo "CPU: cpuinfo PID tidak bisa dibaca."; fi
@@ -27,9 +53,6 @@ status)
       logs=$(logcat -d -v epoch --pid="$pid" -s 'ArilEFO:I' '*:S' 2>/dev/null | awk -v s="$since" '$1+0>=s' | tail -25)
     fi
     printf '%s\n' "$logs"
-    case "$logs" in *"field Java Build terbaca kembali"*) echo "Device: modul memverifikasi Java Build di proses. Pembacaan oleh kode game belum diukur.";; *) echo "Device: verifikasi Java Build belum terlihat.";; esac
-    case "$logs" in *"mengembalikan Apple A8 GPU"*) echo "GPU: kueri GL_RENDERER teramati di proses.";; *) echo "GPU: belum ada bukti kueri renderer OpenGL ES.";; esac
-    case "$logs" in *"kueri ekstensi teramati"*) echo "Ekstensi GLES: jumlah token teramati pada log di atas.";; *) echo "Ekstensi GLES: belum ada bukti enumerasi."; esac
   else echo "Game belum berjalan."; fi
   ;;
 set|restore)

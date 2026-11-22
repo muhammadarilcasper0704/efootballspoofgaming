@@ -18,6 +18,8 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/mount.h>
 #include <unistd.h>
 
@@ -27,24 +29,61 @@ constexpr char tag[] = "ArilEFO";
 void report(const char* msg) { __android_log_write(ANDROID_LOG_INFO, tag, msg); }
 
 struct Options { bool device{}, cpu{}, gpu{}; };
-Options loadOptions(int dir) {
-    char b[8]{};
-    int f = openat(dir, "selection", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (f < 0) return {};
-    ssize_t n = read(f, b, sizeof b);
-    close(f);
-    if ((n != 3 && !(n == 4 && b[3] == '\n')) || strspn(b, "01") != 3) return {};
-    return {b[0]=='1', b[1]=='1', b[2]=='1'};
-}
-
-bool mountCpu(int dir) {
-    int fd = openat(dir,"cpuinfo",O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) return false;
-    char path[64]; snprintf(path,sizeof path,"/proc/self/fd/%d",fd);
-    bool ok = unshare(CLONE_NEWNS) == 0
-        && mount(nullptr,"/",nullptr,MS_REC | MS_PRIVATE,nullptr) == 0
-        && mount(path,"/proc/cpuinfo",nullptr,MS_BIND,nullptr) == 0;
+constexpr char profileDir[]="/data/adb/modules/aril_efo_personal";
+bool readSelection(int dir, char (&bits)[4]) {
+    char raw[5]{};
+    int fd=openat(dir,"selection",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0)return false;
+    ssize_t size=read(fd,raw,sizeof(raw));
     close(fd);
+    if(size!=3 && !(size==4 && raw[3]=='\n'))return false;
+    for(int i=0;i<3;++i)if(raw[i]!='0' && raw[i]!='1')return false;
+    memcpy(bits,raw,3);
+    return true;
+}
+// The companion can only return three flags from this module's fixed path.
+void companion(int socket) {
+    char bits[4]="---";
+    int dir=open(profileDir,O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+    if(dir>=0){readSelection(dir,bits);close(dir);}
+    send(socket,bits,3,MSG_NOSIGNAL);
+}
+int auditFd=-1;
+void mark(int offset,char value) {
+    if(auditFd>=0)pwrite(auditFd,&value,1,offset);
+}
+void beginAudit(const Options& flags) {
+    auditFd=syscall(__NR_memfd_create,"aril-efo-061",1U);
+    if(auditFd<0)return;
+    char data[]="000-----";
+    data[0]=flags.device?'1':'0';data[1]=flags.cpu?'1':'0';data[2]=flags.gpu?'1':'0';
+    if(write(auditFd,data,8)!=8){close(auditFd);auditFd=-1;}
+}
+bool mountCpu(int dir) {
+    // Prefer the packaged file. A private memory file also works when the
+    // Zygote domain cannot traverse the module directory.
+    int fd=dir<0?-1:openat(dir,"cpuinfo",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0){
+        static constexpr char cpu[]=R"CPU(processor	: 0
+model name	: Apple A8 (Typhoon)
+CPU architecture: 8
+
+processor	: 1
+model name	: Apple A8 (Typhoon)
+CPU architecture: 8
+
+Hardware	: Apple A8
+)CPU";
+        fd=syscall(__NR_memfd_create,"aril-cpuinfo",1U);
+        if(fd<0)return false;
+        if(write(fd,cpu,sizeof(cpu)-1)!=sizeof(cpu)-1){close(fd);return false;}
+    }
+    char path[64]; snprintf(path,sizeof path,"/proc/self/fd/%d",fd);
+    bool ok=unshare(CLONE_NEWNS)==0 && mount(nullptr,"/",nullptr,MS_REC|MS_PRIVATE,nullptr)==0
+        && mount(path,"/proc/cpuinfo",nullptr,MS_BIND,nullptr)==0;
+    int error=errno;
+    close(fd);
+    if(!ok)__android_log_print(ANDROID_LOG_WARN,tag,"CPU: mount errno=%d",error);
     return ok;
 }
 
@@ -121,6 +160,7 @@ const ExtensionList* extensions(Query query) {
     auto it=lists.find(raw);
     if(it==lists.end())it=lists.emplace(raw,ExtensionList(raw)).first;
     if(!extensionsSeen.test_and_set()){
+        mark(7,'1');
         __android_log_print(ANDROID_LOG_INFO,tag,"GLES: kueri ekstensi teramati; %zu token dilaporkan.",it->second.names.size());
         __android_log_print(ANDROID_LOG_INFO,tag,"GL_EXTENSIONS: %s",it->second.joined.c_str());
     }
@@ -134,7 +174,7 @@ template<int N> const GLubyte* gpuString(GLenum name){
     if(!real||!gpuReady.load())return real;
     switch(name){
         case GL_RENDERER:
-            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Apple A8 GPU.");
+            if(!rendererSeen.test_and_set()){mark(6,'1');report("GLES: panggilan GL_RENDERER teramati; mengembalikan Apple A8 GPU.");}
             return bytes("Apple A8 GPU");
         case GL_VENDOR:return bytes("Apple Inc.");
         // Preserve the active context's API and shader language to keep ES3 games compatible.
@@ -225,21 +265,32 @@ public:
         }
         if(!selected){api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);return;}
         int dir=api->getModuleDir();
-        if(dir>=0){
-            flags=loadOptions(dir);
-            if(flags.cpu&&!mountCpu(dir)) report("CPU: pemasangan cpuinfo gagal.");
-            close(dir);
+        char bits[4]{};
+        bool valid=dir>=0 && readSelection(dir,bits);
+        if(!valid){
+            int sock=api->connectCompanion();
+            if(sock>=0){
+                valid=recv(sock,bits,3,MSG_WAITALL)==3 && strspn(bits,"01")==3;
+                close(sock);
+            }
         }
+        if(valid)flags={bits[0]=='1',bits[1]=='1',bits[2]=='1'};
+        else report("Konfigurasi: pembacaan langsung dan melalui companion gagal.");
+        if(flags.cpu&&!mountCpu(dir))report("CPU: pemasangan cpuinfo gagal.");
+        if(dir>=0)close(dir);
         if(!flags.gpu&&!flags.device&&!flags.cpu)api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
     }
     void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
-        if(!selected)return;
+        if(!selected||(!flags.device&&!flags.cpu&&!flags.gpu))return;
+        beginAudit(flags);
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
         if(flags.cpu)report(setBuild(env,true)?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
-        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");
-        if(flags.cpu) report(verifyCpu()?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
-        if(flags.gpu)enableGPU();
+        if(flags.device){bool ok=setBuild(env,false);mark(3,ok?'1':'0');report(ok?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");}
+        if(flags.cpu) report(verifyCpu()?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");}
+        if(flags.gpu){enableGPU();mark(5,gpuReady.load()?'1':'0');}
     }
 };
 }
 REGISTER_ZYGISK_MODULE(Personal)
+
+REGISTER_ZYGISK_COMPANION(companion)
