@@ -33,6 +33,7 @@ status)
     printf '%s\n' "$logs"
     case "$logs" in *"field Java Build terbaca kembali"*) echo "Device: modul memverifikasi Java Build di proses. Pembacaan oleh kode game belum diukur.";; *) echo "Device: verifikasi Java Build belum terlihat.";; esac
     case "$logs" in *"mengembalikan Mali-T720"*) echo "GPU: kueri GL_RENDERER teramati di proses.";; *) echo "GPU: belum ada bukti kueri renderer OpenGL ES.";; esac
+    case "$logs" in *"kueri ekstensi teramati"*) echo "Ekstensi GLES: jumlah token teramati pada log di atas.";; *) echo "Ekstensi GLES: belum ada bukti enumerasi."; esac
   else echo "Game belum berjalan."; fi
   /data/adb/magisk/busybox sh ./performance.sh status
   for key in before after; do

@@ -1,5 +1,5 @@
 processor	: 0
-model name	: ARMv8 Processor rev 0 (v8l)
+model name	: ARM Cortex-A53 (ARMv8-A)
 Features	: fp asimd evtstrm crc32
 CPU implementer	: 0x41
 CPU architecture: 8
@@ -8,7 +8,7 @@ CPU part	: 0xd03
 CPU revision	: 0
 
 processor	: 1
-model name	: ARMv8 Processor rev 0 (v8l)
+model name	: ARM Cortex-A53 (ARMv8-A)
 Features	: fp asimd evtstrm crc32
 CPU implementer	: 0x41
 CPU architecture: 8
@@ -17,7 +17,7 @@ CPU part	: 0xd03
 CPU revision	: 0
 
 processor	: 2
-model name	: ARMv8 Processor rev 0 (v8l)
+model name	: ARM Cortex-A53 (ARMv8-A)
 Features	: fp asimd evtstrm crc32
 CPU implementer	: 0x41
 CPU architecture: 8
@@ -26,7 +26,7 @@ CPU part	: 0xd03
 CPU revision	: 0
 
 processor	: 3
-model name	: ARMv8 Processor rev 0 (v8l)
+model name	: ARM Cortex-A53 (ARMv8-A)
 Features	: fp asimd evtstrm crc32
 CPU implementer	: 0x41
 CPU architecture: 8

@@ -2,7 +2,15 @@
 #include "zygisk.hpp"
 #include <dobby.h>
 #include <android/log.h>
-#include <GLES2/gl2.h>
+// The two Android GLES entry libraries can export the same or different stubs.
+#include <GLES3/gl3.h>
+#include <map>
+#include <mutex>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <sys/system_properties.h>
+
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -52,16 +60,16 @@ bool verifyCpu() {
     return cores==4 && model;
 }
 
-bool setBuild(JNIEnv* env) {
+bool setBuild(JNIEnv* env,bool soc) {
     jclass build=env->FindClass("android/os/Build");
     if (!build) {env->ExceptionClear(); return false;}
     const char* fields[][2]={
         {"MODEL","SM-G532G"},{"BRAND","samsung"},{"MANUFACTURER","samsung"},
-        {"DEVICE","grandpplte"},{"PRODUCT","grandppltedx"},{"BOARD","MT6737T"},
-        {"SOC_MODEL","MT6737T"},{"SOC_MANUFACTURER","MediaTek"},
-        {"FINGERPRINT","samsung/grandppltedx/grandpplte:6.0.1/MMB29T/G532GDXU1ASA5:user/release-keys"}};
+        {"DEVICE","grandpplte"},{"BOARD","MT6737T"},{"HARDWARE","mt6737t"},
+        {"SOC_MODEL","MT6737T"},{"SOC_MANUFACTURER","MediaTek"}};
     bool all=true;
     for (const auto& pair:fields) {
+        if((strncmp(pair[0],"SOC_",4)==0)!=soc)continue;
         jfieldID field=env->GetStaticFieldID(build,pair[0],"Ljava/lang/String;");
         if (!field) {env->ExceptionClear();all=false;continue;}
         jstring s=env->NewStringUTF(pair[1]);
@@ -80,29 +88,146 @@ bool setBuild(JNIEnv* env) {
     return all;
 }
 
-using Query=const GLubyte* (*)(GLenum);
-Query original=nullptr;
-std::atomic_flag firstRenderer=ATOMIC_FLAG_INIT;
-const GLubyte* profileString(GLenum name){
-    if(!original)return nullptr;
-    const GLubyte* real=original(name);
-    if (!real)return nullptr;
-    if (name==GL_RENDERER){
-        if(!firstRenderer.test_and_set()) report("GLES: panggilan GL_RENDERER teramati; mengembalikan Mali-T720.");
-        return reinterpret_cast<const GLubyte*>("Mali-T720");
+struct ExtensionList {
+    std::vector<std::string> names;
+    std::string joined;
+    explicit ExtensionList(const char* raw) {
+        // Conservative intersection. Only expose extensions supported by the current context.
+        static const std::string allowed =
+            " GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_sync"
+            " GL_OES_depth24 GL_OES_depth_texture GL_OES_packed_depth_stencil"
+            " GL_OES_rgb8_rgba8 GL_OES_compressed_ETC1_RGB8_texture GL_OES_standard_derivatives"
+            " GL_OES_texture_npot GL_OES_vertex_half_float GL_OES_vertex_array_object"
+            " GL_OES_mapbuffer GL_OES_element_index_uint GL_EXT_read_format_bgra"
+            " GL_EXT_texture_format_BGRA8888 GL_EXT_texture_rg GL_EXT_discard_framebuffer"
+            " GL_OES_get_program_binary GL_OES_texture_3D GL_EXT_multisampled_render_to_texture "
+            "GL_OES_surfaceless_context GL_KHR_debug GL_EXT_disjoint_timer_query ";
+        std::istringstream input(raw);
+        std::string word;
+        while(input >> word) {
+            if(allowed.find(" "+word+" ")==std::string::npos)continue;
+            if(!joined.empty())joined+=' ';
+            joined+=word;
+            names.push_back(word);
+        }
     }
-    if(name==GL_VENDOR)return reinterpret_cast<const GLubyte*>("ARM");
-    return real;
+};
+using Query=const GLubyte*(*)(GLenum);
+using Indexed=const GLubyte*(*)(GLenum,GLuint);
+using Integer=void(*)(GLenum,GLint*);
+struct ApiSlot { Query query{}; Indexed indexed{}; Integer integer{}; };
+ApiSlot slots[2]{};
+std::atomic<bool> gpuReady{false};
+std::atomic_flag rendererSeen=ATOMIC_FLAG_INIT,extensionsSeen=ATOMIC_FLAG_INIT;
+const ExtensionList* extensions(Query query) {
+    auto raw=reinterpret_cast<const char*>(query(GL_EXTENSIONS));
+    if(!raw)return nullptr;
+    static std::mutex mutex;
+    static std::map<std::string,ExtensionList> lists;
+    std::lock_guard<std::mutex> guard(mutex);
+    auto it=lists.find(raw);
+    if(it==lists.end())it=lists.emplace(raw,ExtensionList(raw)).first;
+    if(!extensionsSeen.test_and_set()){
+        __android_log_print(ANDROID_LOG_INFO,tag,"GLES: kueri ekstensi teramati; %zu token dilaporkan.",it->second.names.size());
+        __android_log_print(ANDROID_LOG_INFO,tag,"GL_EXTENSIONS: %s",it->second.joined.c_str());
+    }
+    return &it->second;
+}
+const GLubyte* bytes(const char* s){return reinterpret_cast<const GLubyte*>(s);}
+template<int N> const GLubyte* gpuString(GLenum name){
+    Query query=slots[N].query;
+    if(!query)return nullptr;
+    const GLubyte* real=query(name);
+    if(!real||!gpuReady.load())return real;
+    switch(name){
+        case GL_RENDERER:
+            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Mali-T720.");
+            return bytes("Mali-T720");
+        case GL_VENDOR:return bytes("ARM");
+        case GL_VERSION:{
+            int major=0,minor=0;
+            if(sscanf(reinterpret_cast<const char*>(real),"OpenGL ES %d.%d",&major,&minor)!=2)return real;
+            if(major==2)return bytes("OpenGL ES 2.0");
+            if(major>=3)return bytes(major==3&&minor==0?"OpenGL ES 3.0":"OpenGL ES 3.1");
+            return real;
+        }
+        case GL_SHADING_LANGUAGE_VERSION:{
+            int major=0,minor=0;
+            if(sscanf(reinterpret_cast<const char*>(real),"OpenGL ES GLSL ES %d.%d",&major,&minor)!=2)return real;
+            if(major==1)return bytes("OpenGL ES GLSL ES 1.00");
+            if(major>=3)return bytes(major==3&&minor==0?"OpenGL ES GLSL ES 3.00":"OpenGL ES GLSL ES 3.10");
+            return real;
+        }
+        case GL_EXTENSIONS:{auto list=extensions(query);return list?bytes(list->joined.c_str()):real;}
+        default:return real;
+    }
+}
+template<int N> void gpuInteger(GLenum name,GLint* result){
+    auto& api=slots[N];
+    if(!api.integer)return;
+    api.integer(name,result);
+    if(!result || !gpuReady.load())return;
+    if(name!=GL_NUM_EXTENSIONS && name!=GL_MINOR_VERSION)return;
+    auto version=reinterpret_cast<const char*>(api.query(GL_VERSION));
+    int major=0,minor=0;
+    if(!version||sscanf(version,"OpenGL ES %d.%d",&major,&minor)!=2||major!=3)return;
+    if(name==GL_MINOR_VERSION){if(*result>1)*result=1;return;}
+    auto list=extensions(api.query);
+    if(list)*result=static_cast<GLint>(list->names.size());
+}
+template<int N> const GLubyte* gpuIndexed(GLenum name,GLuint i){
+    auto& api=slots[N];
+    if(!api.indexed)return nullptr;
+    if(!gpuReady.load()||name!=GL_EXTENSIONS)return api.indexed(name,i);
+    const char* v=reinterpret_cast<const char*>(api.query(GL_VERSION));
+    if(!v || strncmp(v,"OpenGL ES 3.",12)!=0)return api.indexed(name,i);
+    auto list=extensions(api.query);
+    if(!list)return api.indexed(name,i);
+    if(i>=list->names.size())return api.indexed(name,~GLuint(0));
+    return bytes(list->names[i].c_str());
+}
+template<typename T> bool attach(void* addr,T replacement,T& original){
+    return addr && DobbyHook(addr,reinterpret_cast<dobby_dummy_func_t>(replacement),
+            reinterpret_cast<dobby_dummy_func_t*>(&original))==0;
 }
 void enableGPU(){
-    // Keep the loader reference while the replacement is installed.
-    void* lib=dlopen("libGLESv2.so",RTLD_NOW | RTLD_LOCAL);
-    if (!lib){report("GLES: loader tidak tersedia.");return;}
-    void* fn=dlsym(lib,"glGetString");
-    if (!fn || DobbyHook(fn,reinterpret_cast<dobby_dummy_func_t>(profileString),reinterpret_cast<dobby_dummy_func_t*>(&original))!=0){
-        dlclose(lib);report("GLES: pemasangan gagal.");return;
-    }
-    report("GLES: menunggu panggilan GL_RENDERER.");
+    void* lib[2]={dlopen("libGLESv2.so",RTLD_NOW|RTLD_LOCAL),dlopen("libGLESv3.so",RTLD_NOW|RTLD_LOCAL)};
+    if(!lib[0]||!lib[1]){report("GLES: loader ES2/ES3 tidak lengkap.");return;}
+    void* q[2],*n[2],*idx[2];
+    for(int i=0;i<2;i++){q[i]=dlsym(lib[i],"glGetString");n[i]=dlsym(lib[i],"glGetIntegerv");idx[i]=dlsym(lib[i],"glGetStringi");}
+    if(!q[0]||!q[1]||!n[0]||!n[1]||!idx[1]){report("GLES: ekspor kueri belum lengkap.");return;}
+    bool ok=attach(q[0],gpuString<0>,slots[0].query);
+    if(q[0]==q[1])slots[1].query=slots[0].query;
+    else ok=ok&&attach(q[1],gpuString<1>,slots[1].query);
+    ok=ok&&attach(n[0],gpuInteger<0>,slots[0].integer);
+    if(n[0]==n[1])slots[1].integer=slots[0].integer;
+    else ok=ok&&attach(n[1],gpuInteger<1>,slots[1].integer);
+    ok=ok&&attach(idx[1],gpuIndexed<1>,slots[1].indexed);
+    if(idx[0]==idx[1])slots[0].indexed=slots[1].indexed;
+    else if(idx[0])ok=ok&&attach(idx[0],gpuIndexed<0>,slots[0].indexed);
+    gpuReady.store(ok);
+    report(ok?"GLES: profil tersedia; menunggu kueri game.":"GLES: pemasangan tidak lengkap; kueri memakai hasil driver.");
+}
+using PropertyGet=int(*)(const char*,char*);
+PropertyGet systemGet=nullptr;
+bool deviceProps=false,socProps=false;
+int profileProperty(const char* key,char* out){
+    if(!key||!out||!systemGet)return systemGet?systemGet(key,out):0;
+    struct Field {const char* key;const char* value;};
+    static constexpr Field deviceFields[]={
+        {"ro.product.manufacturer","samsung"},{"ro.product.model","SM-G532G"},
+        {"ro.product.brand","samsung"},{"ro.product.board","MT6737T"},
+        {"ro.product.device","grandpplte"},{"ro.hardware","mt6737t"},{"ro.board.platform","mt6737t"}
+    };
+    static constexpr Field cpuFields[]={{"ro.soc.model","MT6737T"},{"ro.soc.manufacturer","MediaTek"}};
+    if(deviceProps)for(auto& f:deviceFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
+    if(socProps)for(auto& f:cpuFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
+    return systemGet(key,out);
+}
+void enableProperties(bool device,bool cpu){
+    deviceProps=device;socProps=cpu;
+    const bool ok=attach(dlsym(RTLD_DEFAULT,"__system_property_get"),profileProperty,systemGet);
+    report(ok?"Properti: getter langsung siap di proses game.":"Properti: getter langsung tidak tersedia.");
 }
 
 class Personal final:public zygisk::ModuleBase {
@@ -126,11 +251,13 @@ public:
             if(flags.cpu&&!mountCpu(dir)) report("CPU: pemasangan cpuinfo gagal.");
             close(dir);
         }
-        if(!flags.gpu)api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+        if(!flags.gpu&&!flags.device&&!flags.cpu)api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
     }
     void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
         if(!selected)return;
-        if(flags.device) report(setBuild(env)?"Device: field Java Build terbaca kembali.":"Device: sebagian field Java Build gagal.");
+        if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
+        if(flags.cpu)report(setBuild(env,true)?"CPU: model SoC Java terbaca kembali.":"CPU: model SoC Java belum lengkap.");
+        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali.":"Device: sebagian field Java Build gagal.");
         if(flags.cpu) report(verifyCpu()?"CPU: profil empat inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
         if(flags.gpu)enableGPU();
     }
