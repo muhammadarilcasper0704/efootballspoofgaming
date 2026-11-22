@@ -286,7 +286,7 @@ public:
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
         if(flags.cpu)report(setBuild(env,true)?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
         if(flags.device){bool ok=setBuild(env,false);mark(3,ok?'1':'0');report(ok?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");}
-        if(flags.cpu) report(verifyCpu()?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");}
+        if(flags.cpu){bool ok=verifyCpu();mark(4,ok?'1':'0');report(ok?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");}
         if(flags.gpu){enableGPU();mark(5,gpuReady.load()?'1':'0');}
     }
 };
