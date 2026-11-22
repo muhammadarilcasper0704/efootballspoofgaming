@@ -64,8 +64,8 @@ bool setBuild(JNIEnv* env,bool soc) {
     jclass build=env->FindClass("android/os/Build");
     if (!build) {env->ExceptionClear(); return false;}
     const char* fields[][2]={
-        {"MODEL","SM-G532G"},{"BRAND","samsung"},{"MANUFACTURER","samsung"},
-        {"DEVICE","grandpplte"},{"BOARD","MT6737T"},{"HARDWARE","mt6737t"},
+        {"MODEL","SM-J110H"},{"BRAND","samsung"},{"MANUFACTURER","samsung"},
+        {"DEVICE","j1pop3g"},{"BOARD","SC7727S"},
         {"SOC_MODEL","MT6737T"},{"SOC_MANUFACTURER","MediaTek"}};
     bool all=true;
     for (const auto& pair:fields) {
@@ -215,9 +215,9 @@ int profileProperty(const char* key,char* out){
     if(!key||!out||!systemGet)return systemGet?systemGet(key,out):0;
     struct Field {const char* key;const char* value;};
     static constexpr Field deviceFields[]={
-        {"ro.product.manufacturer","samsung"},{"ro.product.model","SM-G532G"},
-        {"ro.product.brand","samsung"},{"ro.product.board","MT6737T"},
-        {"ro.product.device","grandpplte"},{"ro.hardware","mt6737t"},{"ro.board.platform","mt6737t"}
+        {"ro.product.manufacturer","samsung"},{"ro.product.model","SM-J110H"},
+        {"ro.product.brand","samsung"},{"ro.product.board","SC7727S"},
+        {"ro.product.device","j1pop3g"},{"ro.board.platform","sc8830"}
     };
     static constexpr Field cpuFields[]={{"ro.soc.model","MT6737T"},{"ro.soc.manufacturer","MediaTek"}};
     if(deviceProps)for(auto& f:deviceFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
@@ -257,7 +257,7 @@ public:
         if(!selected)return;
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
         if(flags.cpu)report(setBuild(env,true)?"CPU: model SoC Java terbaca kembali.":"CPU: model SoC Java belum lengkap.");
-        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali.":"Device: sebagian field Java Build gagal.");
+        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali (SM-J110H).":"Device: sebagian field Java Build gagal.");
         if(flags.cpu) report(verifyCpu()?"CPU: profil empat inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
         if(flags.gpu)enableGPU();
     }
