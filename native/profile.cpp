@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
@@ -53,18 +54,13 @@ void mark(int offset,char value) {
     if(auditFd>=0)pwrite(auditFd,&value,1,offset);
 }
 void beginAudit(const Options& flags) {
-    auditFd=syscall(__NR_memfd_create,"aril-efo-061",1U);
+    auditFd=syscall(__NR_memfd_create,"aril-efo-062",1U);
     if(auditFd<0)return;
-    char data[]="000-----";
+    char data[]="000-------";
     data[0]=flags.device?'1':'0';data[1]=flags.cpu?'1':'0';data[2]=flags.gpu?'1':'0';
-    if(write(auditFd,data,8)!=8){close(auditFd);auditFd=-1;}
+    if(write(auditFd,data,10)!=10){close(auditFd);auditFd=-1;}
 }
-bool mountCpu(int dir) {
-    // Prefer the packaged file. A private memory file also works when the
-    // Zygote domain cannot traverse the module directory.
-    int fd=dir<0?-1:openat(dir,"cpuinfo",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
-    if(fd<0){
-        static constexpr char cpu[]=R"CPU(processor	: 0
+static constexpr char cpu[]=R"CPU(processor	: 0
 model name	: Apple A8 (Typhoon)
 CPU architecture: 8
 
@@ -74,6 +70,13 @@ CPU architecture: 8
 
 Hardware	: Apple A8
 )CPU";
+
+bool mountCpu(int dir) {
+    // Prefer the packaged file. A private memory file also works when the
+    // Zygote domain cannot traverse the module directory.
+    int fd=dir<0?-1:openat(dir,"cpuinfo",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+    if(fd<0){
+
         fd=syscall(__NR_memfd_create,"aril-cpuinfo",1U);
         if(fd<0)return false;
         if(write(fd,cpu,sizeof(cpu)-1)!=sizeof(cpu)-1){close(fd);return false;}
@@ -209,6 +212,64 @@ template<typename T> bool attach(void* addr,T replacement,T& original){
     return addr && DobbyHook(addr,reinterpret_cast<dobby_dummy_func_t>(replacement),
             reinterpret_cast<dobby_dummy_func_t*>(&original))==0;
 }
+using Open = int(*)(const char*, int, ...);
+using OpenAt = int(*)(int, const char*, int, ...);
+using Stream = FILE*(*)(const char*, const char*);
+Open originalOpen{};
+OpenAt originalOpenAt{};
+Stream originalStream{};
+thread_local bool cpuSelfTest=false;
+std::atomic_flag observedCpu=ATOMIC_FLAG_INIT;
+void noteCpuOpen(){
+    if(!cpuSelfTest && !observedCpu.test_and_set())mark(9,'1');
+}
+bool needsMode(int flags){
+    return (flags & O_CREAT) || (flags & O_TMPFILE)==O_TMPFILE;
+}
+int profileFd(const char* path,int flags){
+    if(!path || strcmp(path,"/proc/cpuinfo")!=0 || (flags & ~(O_CLOEXEC|O_NONBLOCK|O_LARGEFILE|O_NOFOLLOW))!=0)return -1;
+    int fd=syscall(__NR_memfd_create,"aril-a8-cpu",1U);
+    if(fd<0)return -1;
+    int reader=-1;
+    if(write(fd,cpu,sizeof(cpu)-1)==sizeof(cpu)-1){
+        char link[64];
+        snprintf(link,sizeof(link),"/proc/self/fd/%d",fd);
+        reader=syscall(__NR_openat,AT_FDCWD,link,flags & ~O_NOFOLLOW,0);
+    }
+    close(fd);
+    return reader;
+}
+int openCpu(const char* path,int flags,...){
+    int fd=profileFd(path,flags);
+    if(fd>=0){noteCpuOpen();return fd;}
+    if(!needsMode(flags))return originalOpen(path,flags);
+    va_list ap;va_start(ap,flags);int mode=va_arg(ap,int);va_end(ap);
+    return originalOpen(path,flags,mode);
+}
+int openAtCpu(int dir,const char* path,int flags,...){
+    int fd=profileFd(path,flags);
+    if(fd>=0){noteCpuOpen();return fd;}
+    if(!needsMode(flags))return originalOpenAt(dir,path,flags);
+    va_list ap;va_start(ap,flags);int mode=va_arg(ap,int);va_end(ap);
+    return originalOpenAt(dir,path,flags,mode);
+}
+FILE* streamCpu(const char* path,const char* mode){
+    if(path && mode && mode[0]=='r' && strspn(mode+1,"be")==strlen(mode+1)){
+        int fd=profileFd(path,strchr(mode,'e')?O_CLOEXEC:0);
+        if(fd>=0){
+            FILE* stream=fdopen(fd,"r");
+            if(stream){noteCpuOpen();return stream;}
+            close(fd);
+        }
+    }
+    return originalStream(path,mode);
+}
+void setupCpuFallback(){
+    attach(dlsym(RTLD_DEFAULT,"fopen"),streamCpu,originalStream);
+    attach(dlsym(RTLD_DEFAULT,"open"),openCpu,originalOpen);
+    attach(dlsym(RTLD_DEFAULT,"openat"),openAtCpu,originalOpenAt);
+}
+
 void enableGPU(){
     void* lib[2]={dlopen("libGLESv2.so",RTLD_NOW|RTLD_LOCAL),dlopen("libGLESv3.so",RTLD_NOW|RTLD_LOCAL)};
     if(!lib[0]||!lib[1]){report("GLES: loader ES2/ES3 tidak lengkap.");return;}
@@ -286,7 +347,16 @@ public:
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
         if(flags.cpu)report(setBuild(env,true)?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
         if(flags.device){bool ok=setBuild(env,false);mark(3,ok?'1':'0');report(ok?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");}
-        if(flags.cpu){bool ok=verifyCpu();mark(4,ok?'1':'0');report(ok?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");}
+        if(flags.cpu){
+            cpuSelfTest=true;
+            bool mounted=verifyCpu();
+            if(!mounted)setupCpuFallback();
+            bool readable=mounted || verifyCpu();
+            cpuSelfTest=false;
+            mark(4,readable?'1':'0');
+            if(!mounted)mark(8,readable?'1':'0');
+            report(readable?"CPU: pembacaan lokal melihat profil Apple A8.":"CPU: profil belum terbaca.");
+        }
         if(flags.gpu){enableGPU();mark(5,gpuReady.load()?'1':'0');}
     }
 };

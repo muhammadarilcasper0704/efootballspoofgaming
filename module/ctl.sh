@@ -17,16 +17,16 @@ status)
     # Match only the descriptor owned by the live game process. The kernel
     # discards it on process exit, so recycled PIDs cannot inherit evidence.
     stamp=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
-    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-061" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
+    fdnum=$(ls -l "/proc/$pid/fd" 2>/dev/null | awk '$NF=="(deleted)" && $(NF-1)=="/memfd:aril-efo-062" && $(NF-2)=="->" && $(NF-3)~/^[0-9]+$/ {print $(NF-3);exit}')
     fd=${fdnum:+/proc/$pid/fd/$fdnum}
     record=''
-    if [ -n "$fd" ]; then record=$(dd if="$fd" bs=8 count=1 2>/dev/null || :); fi
+    if [ -n "$fd" ]; then record=$(dd if="$fd" bs=10 count=1 2>/dev/null || :); fi
     again=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
     [ -n "$stamp" ] && [ "$stamp" = "$again" ] || { echo "PID berubah. Periksa kembali."; exit 0; }
     case "$record" in
-      [01][01][01][01-][01-][01-][01-][01-])
+      [01][01][01][01-][01-][01-][01-][01-][01-][01-])
         active=$(printf '%s' "$record" | cut -c1-3)
-        echo "Modul 0.6.1 dimuat di PID ini dengan pilihan $active."
+        echo "Modul 0.6.2 dimuat di PID ini dengan pilihan $active."
         [ "$active" = "$current" ] || echo "Pilihan baru berlaku setelah game dibuka ulang."
         show() {
           value=$(printf '%s' "$record" | cut -c"$1")
@@ -37,11 +37,13 @@ status)
         show 6 "Pemasangan hook GLES"
         show 7 "Kueri GL_RENDERER mengembalikan Apple A8 GPU"
         show 8 "Kueri ekstensi GLES"
+        show 9 "Uji baca CPU melalui libc (jalur cadangan)"
+        show 10 "Proses membuka profil CPU melalui libc di luar uji modul"
         ;;
       *) echo "Catatan proses tidak ditemukan atau tidak dapat dibaca. Periksa modul dan Zygisk di Magisk, reboot setelah pembaruan, lalu buka ulang eFootball.";;
     esac
     if [ -r "/proc/$pid/root/proc/cpuinfo" ]; then
-      if cmp -s cpuinfo "/proc/$pid/root/proc/cpuinfo"; then echo "CPU: cpuinfo PID cocok persis dengan profil 2 inti Typhoon."; else rc=$?; if [ "$rc" -eq 1 ]; then echo "CPU: cpuinfo PID berbeda dari profil."; else echo "CPU: pembandingan cpuinfo gagal."; fi; fi
+      if cmp -s cpuinfo "/proc/$pid/root/proc/cpuinfo"; then echo "CPU: cpuinfo PID cocok persis dengan profil 2 inti Typhoon."; else rc=$?; if [ "$rc" -eq 1 ]; then echo "CPU: pembacaan kernel berbeda. Lihat hasil uji libc di atas."; else echo "CPU: pembandingan cpuinfo gagal."; fi; fi
     else echo "CPU: cpuinfo PID tidak bisa dibaca."; fi
     # Drop records from earlier processes which used the same PID.
     ticks=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
