@@ -8,10 +8,6 @@ read_current() {
   valid "$current" || { echo "Konfigurasi tidak valid." >&2; exit 1; }
 }
 case "${1:-}" in
-boost|unboost)
-  if [ "$1" = boost ]; then op=enable; else op=disable; fi
-  exec /data/adb/magisk/busybox sh ./performance.sh "$op";;
-before|after) exec /data/adb/magisk/busybox sh ./measure.sh "$1";;
 status)
   read_current
   echo "Pilihan perangkat/CPU/GPU: $current (1 = aktif)"
@@ -19,7 +15,7 @@ status)
   if [ -n "$pid" ]; then
     echo "PID eFootball: $pid"
     if [ -r "/proc/$pid/root/proc/cpuinfo" ]; then
-      if cmp -s cpuinfo "/proc/$pid/root/proc/cpuinfo"; then echo "CPU: cpuinfo PID cocok persis dengan profil 2 inti Cortex-A7."; else rc=$?; if [ "$rc" -eq 1 ]; then echo "CPU: cpuinfo PID berbeda dari profil."; else echo "CPU: pembandingan cpuinfo gagal."; fi; fi
+      if cmp -s cpuinfo "/proc/$pid/root/proc/cpuinfo"; then echo "CPU: cpuinfo PID cocok persis dengan profil 2 inti Typhoon."; else rc=$?; if [ "$rc" -eq 1 ]; then echo "CPU: cpuinfo PID berbeda dari profil."; else echo "CPU: pembandingan cpuinfo gagal."; fi; fi
     else echo "CPU: cpuinfo PID tidak bisa dibaca."; fi
     # Drop records from earlier processes which used the same PID.
     ticks=$(sed 's/.*) //' "/proc/$pid/stat" 2>/dev/null | awk '{print $20}')
@@ -32,13 +28,9 @@ status)
     fi
     printf '%s\n' "$logs"
     case "$logs" in *"field Java Build terbaca kembali"*) echo "Device: modul memverifikasi Java Build di proses. Pembacaan oleh kode game belum diukur.";; *) echo "Device: verifikasi Java Build belum terlihat.";; esac
-    case "$logs" in *"mengembalikan Mali-400 MP"*) echo "GPU: kueri GL_RENDERER teramati di proses.";; *) echo "GPU: belum ada bukti kueri renderer OpenGL ES.";; esac
+    case "$logs" in *"mengembalikan Apple A8 GPU"*) echo "GPU: kueri GL_RENDERER teramati di proses.";; *) echo "GPU: belum ada bukti kueri renderer OpenGL ES.";; esac
     case "$logs" in *"kueri ekstensi teramati"*) echo "Ekstensi GLES: jumlah token teramati pada log di atas.";; *) echo "Ekstensi GLES: belum ada bukti enumerasi."; esac
   else echo "Game belum berjalan."; fi
-  /data/adb/magisk/busybox sh ./performance.sh status
-  for key in before after; do
-    if [ -r "frame.$key" ]; then printf '%s: ' "$key";cat "frame.$key";fi
-  done
   ;;
 set|restore)
   # flock opens the path and holds the lock for the entire child command.

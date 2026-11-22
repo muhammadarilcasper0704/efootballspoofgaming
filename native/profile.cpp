@@ -54,7 +54,7 @@ bool verifyCpu() {
     char line[256]; unsigned cores=0; bool model=false;
     while (fgets(line,sizeof line,f)) {
         if (strncmp(line,"processor\t:",11)==0) ++cores;
-        if (strstr(line,"SC7727S")) model=true;
+        if (strstr(line,"Apple A8")) model=true;
     }
     fclose(f);
     return cores==2 && model;
@@ -64,9 +64,9 @@ bool setBuild(JNIEnv* env,bool soc) {
     jclass build=env->FindClass("android/os/Build");
     if (!build) {env->ExceptionClear(); return false;}
     const char* fields[][2]={
-        {"MODEL","SM-J110H"},{"BRAND","samsung"},{"MANUFACTURER","samsung"},
-        {"DEVICE","j1pop3g"},{"BOARD","SC7727S"},
-        {"SOC_MODEL","SC7727S"},{"SOC_MANUFACTURER","Spreadtrum"}};
+        {"MODEL","iPhone 6"},{"BRAND","Apple"},{"MANUFACTURER","Apple"},
+        {"DEVICE","iPhone7,2"},{"BOARD","N61AP"},{"PRODUCT","iPhone7,2"},{"HARDWARE","t7000"},
+        {"SOC_MODEL","Apple A8"},{"SOC_MANUFACTURER","Apple"}};
     bool all=true;
     for (const auto& pair:fields) {
         if((strncmp(pair[0],"SOC_",4)==0)!=soc)continue;
@@ -92,15 +92,13 @@ struct ExtensionList {
     std::vector<std::string> names;
     std::string joined;
     explicit ExtensionList(const char* raw) {
-        // Conservative intersection. Only expose extensions supported by the current context.
-        static const std::string allowed =
-            " GL_OES_texture_npot GL_OES_compressed_ETC1_RGB8_texture"
-            " GL_OES_standard_derivatives GL_OES_EGL_image GL_OES_depth24"
-            " GL_ARM_rgba8 GL_ARM_mali_shader_binary GL_OES_depth_texture GL_OES_packed_depth_stencil ";
+        // Keep portable extensions supplied by this GL context. Vendor-specific
+        // features are only meaningful with the corresponding implementation.
         std::istringstream input(raw);
         std::string word;
         while(input >> word) {
-            if(allowed.find(" "+word+" ")==std::string::npos)continue;
+            if(word.rfind("GL_OES_", 0) != 0 && word.rfind("GL_EXT_", 0) != 0 &&
+               word.rfind("GL_KHR_", 0) != 0 && word.rfind("GL_APPLE_", 0) != 0) continue;
             if(!joined.empty())joined+=' ';
             joined+=word;
             names.push_back(word);
@@ -136,9 +134,9 @@ template<int N> const GLubyte* gpuString(GLenum name){
     if(!real||!gpuReady.load())return real;
     switch(name){
         case GL_RENDERER:
-            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Mali-400 MP.");
-            return bytes("Mali-400 MP");
-        case GL_VENDOR:return bytes("ARM");
+            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Apple A8 GPU.");
+            return bytes("Apple A8 GPU");
+        case GL_VENDOR:return bytes("Apple Inc.");
         // Preserve the active context's API and shader language to keep ES3 games compatible.
         case GL_EXTENSIONS:{auto list=extensions(query);return list?bytes(list->joined.c_str()):real;}
         default:return real;
@@ -193,14 +191,14 @@ using PropertyGet=int(*)(const char*,char*);
 PropertyGet systemGet=nullptr;
 bool deviceProps=false,socProps=false;
 int profileProperty(const char* key,char* out){
-    if(!key||!out||!systemGet)return systemGet?systemGet(key,out):0;
+    if(!key||!out||!systemGet)return 0;
     struct Field {const char* key;const char* value;};
     static constexpr Field deviceFields[]={
-        {"ro.product.manufacturer","samsung"},{"ro.product.model","SM-J110H"},
-        {"ro.product.brand","samsung"},{"ro.product.board","SC7727S"},
-        {"ro.product.device","j1pop3g"},{"ro.board.platform","sc8830"}
+        {"ro.product.manufacturer","Apple"},{"ro.product.model","iPhone 6"},
+        {"ro.product.brand","Apple"},{"ro.product.board","N61AP"},{"ro.product.name","iPhone7,2"},{"ro.hardware","t7000"},
+        {"ro.product.device","iPhone7,2"},{"ro.board.platform","t7000"}
     };
-    static constexpr Field cpuFields[]={{"ro.soc.model","SC7727S"},{"ro.soc.manufacturer","Spreadtrum"}};
+    static constexpr Field cpuFields[]={{"ro.soc.model","Apple A8"},{"ro.soc.manufacturer","Apple"}};
     if(deviceProps)for(auto& f:deviceFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
     if(socProps)for(auto& f:cpuFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
     return systemGet(key,out);
@@ -237,9 +235,9 @@ public:
     void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
         if(!selected)return;
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
-        if(flags.cpu)report(setBuild(env,true)?"CPU: Spreadtrum SC7727S terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
-        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali (SM-J110H).":"Device: sebagian field Java Build gagal.");
-        if(flags.cpu) report(verifyCpu()?"CPU: SC7727S dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
+        if(flags.cpu)report(setBuild(env,true)?"CPU: Apple A8 terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
+        if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali (iPhone 6).":"Device: sebagian field Java Build gagal.");
+        if(flags.cpu) report(verifyCpu()?"CPU: Apple A8 dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
         if(flags.gpu)enableGPU();
     }
 };
