@@ -14,7 +14,7 @@ for item in selection previous; do
   fi
 done
 if [ ! -f "$MODPATH/selection" ]; then
-  printf '100\n' > "$MODPATH/selection" || abort "Gagal mengaktifkan profil J1 Ace."
+  printf '111\n' > "$MODPATH/selection" || abort "Gagal mengaktifkan profil J1 Ace."
   set_perm "$MODPATH/selection" 0 0 0600
 fi
 ui_print "Aktifkan Zygisk dan reboot. Buka WebUI untuk memilih profil."

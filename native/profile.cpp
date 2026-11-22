@@ -54,10 +54,10 @@ bool verifyCpu() {
     char line[256]; unsigned cores=0; bool model=false;
     while (fgets(line,sizeof line,f)) {
         if (strncmp(line,"processor\t:",11)==0) ++cores;
-        if (strstr(line,"MT6737T")) model=true;
+        if (strstr(line,"SC7727S")) model=true;
     }
     fclose(f);
-    return cores==4 && model;
+    return cores==2 && model;
 }
 
 bool setBuild(JNIEnv* env,bool soc) {
@@ -66,7 +66,7 @@ bool setBuild(JNIEnv* env,bool soc) {
     const char* fields[][2]={
         {"MODEL","SM-J110H"},{"BRAND","samsung"},{"MANUFACTURER","samsung"},
         {"DEVICE","j1pop3g"},{"BOARD","SC7727S"},
-        {"SOC_MODEL","MT6737T"},{"SOC_MANUFACTURER","MediaTek"}};
+        {"SOC_MODEL","SC7727S"},{"SOC_MANUFACTURER","Spreadtrum"}};
     bool all=true;
     for (const auto& pair:fields) {
         if((strncmp(pair[0],"SOC_",4)==0)!=soc)continue;
@@ -94,14 +94,9 @@ struct ExtensionList {
     explicit ExtensionList(const char* raw) {
         // Conservative intersection. Only expose extensions supported by the current context.
         static const std::string allowed =
-            " GL_OES_EGL_image GL_OES_EGL_image_external GL_OES_EGL_sync"
-            " GL_OES_depth24 GL_OES_depth_texture GL_OES_packed_depth_stencil"
-            " GL_OES_rgb8_rgba8 GL_OES_compressed_ETC1_RGB8_texture GL_OES_standard_derivatives"
-            " GL_OES_texture_npot GL_OES_vertex_half_float GL_OES_vertex_array_object"
-            " GL_OES_mapbuffer GL_OES_element_index_uint GL_EXT_read_format_bgra"
-            " GL_EXT_texture_format_BGRA8888 GL_EXT_texture_rg GL_EXT_discard_framebuffer"
-            " GL_OES_get_program_binary GL_OES_texture_3D GL_EXT_multisampled_render_to_texture "
-            "GL_OES_surfaceless_context GL_KHR_debug GL_EXT_disjoint_timer_query ";
+            " GL_OES_texture_npot GL_OES_compressed_ETC1_RGB8_texture"
+            " GL_OES_standard_derivatives GL_OES_EGL_image GL_OES_depth24"
+            " GL_ARM_rgba8 GL_ARM_mali_shader_binary GL_OES_depth_texture GL_OES_packed_depth_stencil ";
         std::istringstream input(raw);
         std::string word;
         while(input >> word) {
@@ -141,23 +136,10 @@ template<int N> const GLubyte* gpuString(GLenum name){
     if(!real||!gpuReady.load())return real;
     switch(name){
         case GL_RENDERER:
-            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Mali-T720.");
-            return bytes("Mali-T720");
+            if(!rendererSeen.test_and_set())report("GLES: panggilan GL_RENDERER teramati; mengembalikan Mali-400 MP.");
+            return bytes("Mali-400 MP");
         case GL_VENDOR:return bytes("ARM");
-        case GL_VERSION:{
-            int major=0,minor=0;
-            if(sscanf(reinterpret_cast<const char*>(real),"OpenGL ES %d.%d",&major,&minor)!=2)return real;
-            if(major==2)return bytes("OpenGL ES 2.0");
-            if(major>=3)return bytes(major==3&&minor==0?"OpenGL ES 3.0":"OpenGL ES 3.1");
-            return real;
-        }
-        case GL_SHADING_LANGUAGE_VERSION:{
-            int major=0,minor=0;
-            if(sscanf(reinterpret_cast<const char*>(real),"OpenGL ES GLSL ES %d.%d",&major,&minor)!=2)return real;
-            if(major==1)return bytes("OpenGL ES GLSL ES 1.00");
-            if(major>=3)return bytes(major==3&&minor==0?"OpenGL ES GLSL ES 3.00":"OpenGL ES GLSL ES 3.10");
-            return real;
-        }
+        // Preserve the active context's API and shader language to keep ES3 games compatible.
         case GL_EXTENSIONS:{auto list=extensions(query);return list?bytes(list->joined.c_str()):real;}
         default:return real;
     }
@@ -167,11 +149,10 @@ template<int N> void gpuInteger(GLenum name,GLint* result){
     if(!api.integer)return;
     api.integer(name,result);
     if(!result || !gpuReady.load())return;
-    if(name!=GL_NUM_EXTENSIONS && name!=GL_MINOR_VERSION)return;
+    if(name!=GL_NUM_EXTENSIONS)return;
     auto version=reinterpret_cast<const char*>(api.query(GL_VERSION));
     int major=0,minor=0;
     if(!version||sscanf(version,"OpenGL ES %d.%d",&major,&minor)!=2||major!=3)return;
-    if(name==GL_MINOR_VERSION){if(*result>1)*result=1;return;}
     auto list=extensions(api.query);
     if(list)*result=static_cast<GLint>(list->names.size());
 }
@@ -219,7 +200,7 @@ int profileProperty(const char* key,char* out){
         {"ro.product.brand","samsung"},{"ro.product.board","SC7727S"},
         {"ro.product.device","j1pop3g"},{"ro.board.platform","sc8830"}
     };
-    static constexpr Field cpuFields[]={{"ro.soc.model","MT6737T"},{"ro.soc.manufacturer","MediaTek"}};
+    static constexpr Field cpuFields[]={{"ro.soc.model","SC7727S"},{"ro.soc.manufacturer","Spreadtrum"}};
     if(deviceProps)for(auto& f:deviceFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
     if(socProps)for(auto& f:cpuFields)if(strcmp(key,f.key)==0){strcpy(out,f.value);return strlen(f.value);}
     return systemGet(key,out);
@@ -256,9 +237,9 @@ public:
     void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
         if(!selected)return;
         if(flags.device||flags.cpu)enableProperties(flags.device,flags.cpu);
-        if(flags.cpu)report(setBuild(env,true)?"CPU: model SoC Java terbaca kembali.":"CPU: model SoC Java belum lengkap.");
+        if(flags.cpu)report(setBuild(env,true)?"CPU: Spreadtrum SC7727S terbaca kembali di Java.":"CPU: model SoC Java belum lengkap.");
         if(flags.device) report(setBuild(env,false)?"Device: field Java Build terbaca kembali (SM-J110H).":"Device: sebagian field Java Build gagal.");
-        if(flags.cpu) report(verifyCpu()?"CPU: profil empat inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
+        if(flags.cpu) report(verifyCpu()?"CPU: SC7727S dua inti terbaca sesudah spesialisasi.":"CPU: profil belum terbaca.");
         if(flags.gpu)enableGPU();
     }
 };
